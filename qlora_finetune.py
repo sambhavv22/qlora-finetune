@@ -20,10 +20,20 @@ DATA_PATH      = "cybersecurity_lora_dataset.jsonl"
 OUTPUT_DIR     = "./outputs/qlora"
 AQUIN_RUN_NAME = "qlora-cybersecurity"
 
+
+def _resolve_precision():
+    """Pick bf16 or fp16 so training dtype matches the quantized model compute path."""
+    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+        return torch.bfloat16, False, True
+    return torch.float16, True, False
+
+
+COMPUTE_DTYPE, USE_FP16, USE_BF16 = _resolve_precision()
+
 BNB_CONFIG = BitsAndBytesConfig(
     load_in_4bit              = True,
     bnb_4bit_quant_type       = "nf4",
-    bnb_4bit_compute_dtype    = torch.float16,
+    bnb_4bit_compute_dtype    = COMPUTE_DTYPE,
     bnb_4bit_use_double_quant = True,
 )
 
@@ -49,11 +59,12 @@ SFT_CFG = SFTConfig(
     save_strategy               = "epoch",
     report_to                   = "none",
     optim                       = "paged_adamw_8bit",
-    fp16                        = True,
+    fp16                        = USE_FP16,
+    bf16                        = USE_BF16,
     # SFT-specific
     max_length                  = 512,
     dataset_text_field          = "text",
-    packing                     = True,
+    packing                     = False,
 )
 
 
@@ -105,6 +116,9 @@ def main():
     login_huggingface()
     ensure_model(MODEL_ID)
 
+    precision = "bf16" if USE_BF16 else "fp16"
+    print(f"[INFO] Training precision: {precision}")
+
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -116,6 +130,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         quantization_config = BNB_CONFIG,
+        torch_dtype         = COMPUTE_DTYPE,
         device_map          = "auto",
     )
 
